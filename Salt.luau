@@ -1,5 +1,5 @@
 --!strict
--- Luau UI Library v1.0
+-- Luau UI Library v1.1
 
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -13,9 +13,9 @@ Library.Theme = table.freeze({
 	Text = Color3.fromRGB(240, 240, 245),
 	SubText = Color3.fromRGB(150, 150, 160),
 	Border = Color3.fromRGB(45, 45, 55),
+    Close = Color3.fromRGB(255, 80, 80)
 })
 
--- Helper to create instances with properties
 local function Create(className: string, props: {[string]: any}?, children: {Instance}?): any
 	local inst = Instance.new(className)
 	if props then
@@ -31,32 +31,36 @@ local function Create(className: string, props: {[string]: any}?, children: {Ins
 	return inst
 end
 
--- ==========================================
--- WINDOW CLASS
--- ==========================================
 local Window = {}
 Window.__index = Window
 
 function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 	local self = setmetatable({}, Window)
+	self.Size = config.Size or UDim2.new(0, 500, 0, 350)
 	
+	-- Re-execution check
+	local guiParent = if gethui then gethui() else Players.LocalPlayer:WaitForChild("PlayerGui")
+	local existing = guiParent:FindFirstChild("LuauUILib")
+	if existing then
+		existing:Destroy()
+	end
+
 	self.ScreenGui = Create("ScreenGui", {
 		Name = "LuauUILib",
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		DisplayOrder = 9999
+		DisplayOrder = 9999,
+		Parent = guiParent
 	})
-	
-	local guiParent = if gethui then gethui() else Players.LocalPlayer:WaitForChild("PlayerGui")
-	self.ScreenGui.Parent = guiParent
 
 	self.Main = Create("Frame", {
 		Name = "Main",
-		Size = config.Size or UDim2.new(0, 500, 0, 350),
-		Position = UDim2.new(0.5, -250, 0.5, -175),
+		Size = self.Size,
+		Position = UDim2.new(0.5, -self.Size.X.Offset/2, 0.5, -self.Size.Y.Offset/2),
 		BackgroundColor3 = Library.Theme.Background,
 		BorderSizePixel = 0,
+		ClipsDescendants = true,
 		Parent = self.ScreenGui
 	}, {
 		Create("UICorner", { CornerRadius = UDim.new(0, 8) }),
@@ -71,9 +75,9 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		Parent = self.Main
 	})
 
-	Create("TextLabel", {
+	local titleLbl = Create("TextLabel", {
 		Text = config.Title,
-		Size = UDim2.new(1, -20, 1, 0),
+		Size = UDim2.new(1, -80, 1, 0),
 		Position = UDim2.new(0, 10, 0, 0),
 		BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold,
@@ -82,6 +86,42 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = self.TitleBar
 	})
+
+    -- Close Button
+	local closeBtn = Create("TextButton", {
+		Size = UDim2.new(0, 25, 0, 25),
+		Position = UDim2.new(1, -30, 0, 5),
+		BackgroundColor3 = Library.Theme.Close,
+		Text = "X",
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		TextColor3 = Library.Theme.Text,
+		Parent = self.TitleBar
+	}, { Create("UICorner", { CornerRadius = UDim.new(0, 4) }) })
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        self.ScreenGui:Destroy()
+    end)
+
+    -- Minimize Button
+	local minBtn = Create("TextButton", {
+		Size = UDim2.new(0, 25, 0, 25),
+		Position = UDim2.new(1, -60, 0, 5),
+		BackgroundColor3 = Library.Theme.Secondary,
+		Text = "-",
+		Font = Enum.Font.GothamBold,
+		TextSize = 16,
+		TextColor3 = Library.Theme.Text,
+		Parent = self.TitleBar
+	}, { Create("UICorner", { CornerRadius = UDim.new(0, 4) }) })
+
+    local minimized = false
+    minBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = if minimized then UDim2.new(0, 500, 0, 35) else self.Size
+        }):Play()
+    end)
 
 	-- Tab Container
 	self.TabList = Create("Frame", {
@@ -100,9 +140,7 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		BackgroundColor3 = Library.Theme.Secondary,
 		BorderSizePixel = 0,
 		Parent = self.Main
-	}, {
-		Create("UICorner", { CornerRadius = UDim.new(0, 8) })
-	})
+	}, { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
 	
 	-- Draggable Logic
 	local dragging, dragStart, startPos
@@ -132,7 +170,6 @@ end
 function Window:CreateTab(name: string)
 	local tab = { Elements = {} }
 	
-	-- Tab Button
 	local btn = Create("TextButton", {
 		Name = name,
 		Size = UDim2.new(1, -10, 0, 30),
@@ -150,7 +187,6 @@ function Window:CreateTab(name: string)
 		Create("UIPadding", { PaddingLeft = UDim.new(0, 10) })
 	})
 	
-	-- Scrolling Frame for elements
 	local scroll = Create("ScrollingFrame", {
 		Name = name,
 		Size = UDim2.new(1, -20, 1, -20),
@@ -161,49 +197,42 @@ function Window:CreateTab(name: string)
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		Visible = false,
 		Parent = self.Content
-	}, {
-		Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder })
-	})
+	}, { Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }) })
 	
 	table.insert(self.Tabs, tab)
 	
-	btn.MouseButton1Click:Connect(function()
-		-- Hide all
+	local function SelectTab()
 		for _, t in self.Tabs do
 			t.Content.Visible = false
 			t.Button.BackgroundTransparency = 1
 			t.Button.TextColor3 = Library.Theme.SubText
 		end
-		-- Show current
 		scroll.Visible = true
 		btn.BackgroundTransparency = 0.8
 		btn.TextColor3 = Library.Theme.Text
-	end)
+	end
+	
+	btn.MouseButton1Click:Connect(SelectTab)
 	
 	tab.Button = btn
 	tab.Content = scroll
 	tab.Window = self
 	
-	-- Select first tab by default
+	-- Auto-select first tab safely (fixes the Activated error)
 	if #self.Tabs == 1 then
-		btn:Activated()
+		SelectTab()
 	end
 	
 	return tab
 end
 
--- ==========================================
--- ELEMENT CLASSES
--- ==========================================
 local function CreateElement(tab, height: number): Frame
 	local f = Create("Frame", {
 		Size = UDim2.new(1, 0, 0, height),
 		BackgroundColor3 = Library.Theme.Background,
 		BorderSizePixel = 0,
 		Parent = tab.Content
-	}, {
-		Create("UICorner", { CornerRadius = UDim.new(0, 6) })
-	})
+	}, { Create("UICorner", { CornerRadius = UDim.new(0, 6) }) })
 	tab.Content.CanvasSize += UDim2.new(0, 0, 0, height + 8)
 	return f
 end
@@ -219,7 +248,7 @@ function Window:AddButton(tab, text: string, callback: () -> ())
 		TextColor3 = Library.Theme.Accent,
 		Parent = frame
 	}).MouseButton1Click:Connect(function()
-		task.spawn(callback) -- Non-blocking callback
+		task.spawn(callback)
 	end)
 end
 
@@ -227,7 +256,7 @@ function Window:AddToggle(tab, text: string, default: boolean, callback: (boolea
 	local frame = CreateElement(tab, 32)
 	local state = default
 	
-	local lbl = Create("TextLabel", {
+	Create("TextLabel", {
 		Size = UDim2.new(1, -50, 1, 0),
 		Position = UDim2.new(0, 10, 0, 0),
 		BackgroundTransparency = 1,
@@ -245,18 +274,14 @@ function Window:AddToggle(tab, text: string, default: boolean, callback: (boolea
 		BackgroundColor3 = if state then Library.Theme.Accent else Library.Theme.Border,
 		Text = "",
 		Parent = frame
-	}, {
-		Create("UICorner", { CornerRadius = UDim.new(1, 0) })
-	})
+	}, { Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
 	
 	local knob = Create("Frame", {
 		Size = UDim2.new(0, 16, 0, 16),
 		Position = if state then UDim2.new(1, -18, 0.5, -8) else UDim2.new(0, 2, 0.5, -8),
 		BackgroundColor3 = Library.Theme.Text,
 		Parent = btn
-	}, {
-		Create("UICorner", { CornerRadius = UDim.new(1, 0) })
-	})
+	}, { Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
 	
 	btn.MouseButton1Click:Connect(function()
 		state = not state
@@ -269,7 +294,7 @@ end
 function Window:AddSlider(tab, text: string, min: number, max: number, default: number, callback: (number) -> ())
 	local frame = CreateElement(tab, 45)
 	
-	local lbl = Create("TextLabel", {
+	Create("TextLabel", {
 		Size = UDim2.new(0.7, 0, 0, 20),
 		Position = UDim2.new(0, 10, 0, 5),
 		BackgroundTransparency = 1,
@@ -298,17 +323,13 @@ function Window:AddSlider(tab, text: string, min: number, max: number, default: 
 		Position = UDim2.new(0, 10, 0, 30),
 		BackgroundColor3 = Library.Theme.Border,
 		Parent = frame
-	}, {
-		Create("UICorner", { CornerRadius = UDim.new(1, 0) })
-	})
+	}, { Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
 	
 	local fill = Create("Frame", {
 		Size = UDim2.new((default - min) / (max - min), 0, 1, 0),
 		BackgroundColor3 = Library.Theme.Accent,
 		Parent = bar
-	}, {
-		Create("UICorner", { CornerRadius = UDim.new(1, 0) })
-	})
+	}, { Create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
 	
 	local hitbox = Create("TextButton", {
 		Size = UDim2.new(1, 0, 3, 0),
