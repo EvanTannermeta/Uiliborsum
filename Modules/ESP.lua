@@ -1,72 +1,151 @@
-
 -- Modules/ESP.lua
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
-local espObjects = {}
-local connections = {}
-
-local function createESP(player)
-	if player == Players.LocalPlayer then return end
-
-	local billboard = Instance.new("BillboardGui")
-	billboard.Name = "ESP_" .. player.Name
-	billboard.AlwaysOnTop = true
-	billboard.Size = UDim2.new(0, 100, 0, 50)
-	billboard.StudsOffset = Vector3.new(0, 3, 0)
-	billboard.Enabled = false
-
-	local text = Instance.new("TextLabel")
-	text.Size = UDim2.new(1, 0, 1, 0)
-	text.BackgroundTransparency = 1
-	text.TextColor3 = Color3.fromRGB(255, 80, 80)
-	text.Font = Enum.Font.GothamBold
-	text.TextSize = 14
-	text.Text = player.Name
-	text.Parent = billboard
-
-	billboard.Parent = player.Character or player.CharacterAdded:Wait()
-	espObjects[player] = billboard
+-- Check if Drawing library exists
+if not Drawing then
+	warn("[ESP] Drawing library not found! Your executor does not support 2D ESP.")
+	return function() end
 end
 
--- Render loop to update positions
-table.insert(connections, RunService.RenderStepped:Connect(function()
-	for player, gui in pairs(espObjects) do
-		local char = player.Character
-		if char and char:FindFirstChild("HumanoidRootPart") then
-			gui.Adornee = char.HumanoidRootPart
-			gui.Enabled = true
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+local ESP_Cache = {}
+local Connections = {}
+
+-- Helper to create Drawing objects cleanly
+local function CreateDrawing(className, properties)
+	local obj = Drawing.new(className)
+	for k, v in pairs(properties) do
+		obj[k] = v
+	end
+	return obj
+end
+
+local function CreateESP(player)
+	if player == LocalPlayer then return end
+	if ESP_Cache[player] then return end
+
+	local Box = CreateDrawing("Square", {
+		Color = Color3.fromRGB(255, 80, 80),
+		Thickness = 1.5,
+		Filled = false,
+		Transparency = 1,
+		Visible = false
+	})
+
+	local Name = CreateDrawing("Text", {
+		Color = Color3.fromRGB(255, 255, 255),
+		Size = 14,
+		Center = true,
+		Outline = true,
+		OutlineColor = Color3.fromRGB(0, 0, 0),
+		Font = Drawing.Fonts.GothamBold,
+		Visible = false
+	})
+
+	local Distance = CreateDrawing("Text", {
+		Color = Color3.fromRGB(200, 200, 200),
+		Size = 12,
+		Center = true,
+		Outline = true,
+		OutlineColor = Color3.fromRGB(0, 0, 0),
+		Font = Drawing.Fonts.Gotham,
+		Visible = false
+	})
+
+	ESP_Cache[player] = {
+		Box = Box,
+		Name = Name,
+		Distance = Distance
+	}
+end
+
+local function RemoveESP(player)
+	if ESP_Cache[player] then
+		ESP_Cache[player].Box:Remove()
+		ESP_Cache[player].Name:Remove()
+		ESP_Cache[player].Distance:Remove()
+		ESP_Cache[player] = nil
+	end
+end
+
+-- Initialize existing players
+for _, player in ipairs(Players:GetPlayers()) do
+	CreateESP(player)
+end
+
+-- Player Join/Leave
+table.insert(Connections, Players.PlayerAdded:Connect(CreateESP))
+table.insert(Connections, Players.PlayerRemoving:Connect(RemoveESP))
+
+-- Main Render Loop
+table.insert(Connections, RunService.RenderStepped:Connect(function()
+	if not Camera then
+		Camera = Workspace.CurrentCamera
+	end
+
+	for player, esp in pairs(ESP_Cache) do
+		local character = player.Character
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			local rootPart = character:FindFirstChild("HumanoidRootPart")
+			local head = character:FindFirstChild("Head")
+
+			if humanoid and humanoid.Health > 0 and rootPart and head then
+				-- Calculate 2D screen positions
+				local headPos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+				local rootPos = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 2.5, 0))
+				
+				if onScreen then
+					local height = math.abs(headPos.Y - rootPos.Y)
+					local width = height / 2
+					local x = headPos.X - width / 2
+					local y = headPos.Y
+
+					-- Update Box
+					esp.Box.Size = Vector2.new(width, height)
+					esp.Box.Position = Vector2.new(x, y)
+					esp.Box.Visible = true
+
+					-- Update Name
+					esp.Name.Text = player.Name
+					esp.Name.Position = Vector2.new(headPos.X, y - 18)
+					esp.Name.Visible = true
+
+					-- Update Distance
+					local dist = math.floor((rootPart.Position - Camera.CFrame.Position).Magnitude)
+					esp.Distance.Text = tostring(dist) .. " studs"
+					esp.Distance.Position = Vector2.new(headPos.X, y + height + 2)
+					esp.Distance.Visible = true
+				else
+					esp.Box.Visible = false
+					esp.Name.Visible = false
+					esp.Distance.Visible = false
+				end
+			else
+				esp.Box.Visible = false
+				esp.Name.Visible = false
+				esp.Distance.Visible = false
+			end
 		else
-			gui.Enabled = false
+			esp.Box.Visible = false
+			esp.Name.Visible = false
+			esp.Distance.Visible = false
 		end
 	end
 end))
 
--- Player management
-for _, p in ipairs(Players:GetPlayers()) do
-	task.spawn(createESP, p)
-end
-
-table.insert(connections, Players.PlayerAdded:Connect(function(p)
-	createESP(p)
-	p.CharacterAdded:Connect(function()
-		if espObjects[p] then
-			espObjects[p].Parent = p.Character
-		end
-	end)
-end))
-
-table.insert(connections, Players.PlayerRemoving:Connect(function(p)
-	if espObjects[p] then
-		espObjects[p]:Destroy()
-		espObjects[p] = nil
-	end
-end))
-
--- THE MAGIC: Return a cleanup function so the UI can turn it off
+-- Return the cleanup function so the UI loader can turn it off
 return function()
-	for _, c in ipairs(connections) do c:Disconnect() end
-	for _, gui in pairs(espObjects) do gui:Destroy() end
-	espObjects = {}
-	connections = {}
+	for _, conn in ipairs(Connections) do
+		conn:Disconnect()
+	end
+	for player, _ in pairs(ESP_Cache) do
+		RemoveESP(player)
+	end
+	ESP_Cache = {}
+	Connections = {}
 end
