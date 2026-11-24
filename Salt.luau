@@ -1,5 +1,5 @@
 --!strict
--- Luau UI Library v1.2 (Resizable + Persistent)
+-- Luau UI Library v1.3 (Persistent, Draggable Icon, Fixed Minimize)
 
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
@@ -96,7 +96,62 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		Create("UIStroke", { Color = Library.Theme.Border, Thickness = 1 })
 	})
 
-	-- Title Bar
+    -- ==========================================
+    -- LAUNCHER ICON (Hidden by default)
+    -- ==========================================
+    self.Icon = Create("TextButton", {
+        Name = "LauncherIcon",
+        Size = UDim2.new(0, 45, 0, 45),
+        Position = UDim2.new(0, 50, 0, 50),
+        BackgroundColor3 = Library.Theme.Accent,
+        Text = "UI",
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        TextColor3 = Library.Theme.Text,
+        Visible = false,
+        Parent = self.ScreenGui
+    }, {
+        Create("UICorner", { CornerRadius = UDim.new(1, 0) }),
+        Create("UIStroke", { Color = Library.Theme.Border, Thickness = 1 })
+    })
+
+    -- Icon Dragging Logic
+    local iconDragging, iconMoved = false, false
+    local iconDragStart, iconStartPos
+    
+    self.Icon.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            iconDragging = true
+            iconMoved = false
+            iconDragStart = input.Position
+            iconStartPos = self.Icon.Position
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if iconDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - iconDragStart
+            if delta.Magnitude > 5 then iconMoved = true end
+            if iconMoved then
+                self.Icon.Position = UDim2.new(iconStartPos.X.Scale, iconStartPos.X.Offset + delta.X, iconStartPos.Y.Scale, iconStartPos.Y.Offset + delta.Y)
+            end
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if iconDragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+            iconDragging = false
+            if not iconMoved then
+                -- Clicked without dragging: Open UI
+                self.Icon.Visible = false
+                self.Main.Visible = true
+            end
+        end
+    end)
+
+	-- ==========================================
+    -- TITLE BAR & BUTTONS
+    -- ==========================================
 	self.TitleBar = Create("Frame", {
 		Name = "TitleBar",
 		Size = UDim2.new(1, 0, 0, 35),
@@ -129,7 +184,8 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 	}, { Create("UICorner", { CornerRadius = UDim.new(0, 4) }) })
     
     closeBtn.MouseButton1Click:Connect(function()
-        self.ScreenGui:Destroy()
+        self.Main.Visible = false
+        self.Icon.Visible = true
     end)
 
     -- Minimize Button
@@ -173,7 +229,6 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
         Parent = self.Main
     })
     
-    -- Draw a visual grip for the handle
     Create("TextLabel", {
         Size = UDim2.new(1, 0, 1, 0),
         BackgroundTransparency = 1,
@@ -186,13 +241,28 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
         Parent = self.ResizeHandle
     })
 
+    -- ==========================================
+    -- MINIMIZE LOGIC (Fixed)
+    -- ==========================================
     local minimized = false
+    local preMinimizeSize = self.Size -- Store the size before minimizing
+    
     minBtn.MouseButton1Click:Connect(function()
         minimized = not minimized
         self.ResizeHandle.Visible = not minimized
-        TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
-            Size = if minimized then UDim2.new(0, self.Main.Size.X.Offset, 0, 35) else self.Main.Size
-        }):Play()
+        
+        if minimized then
+            -- Save current size before minimizing
+            preMinimizeSize = self.Main.Size
+            TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+                Size = UDim2.new(0, self.Main.Size.X.Offset, 0, 35)
+            }):Play()
+        else
+            -- Restore to the saved size
+            TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+                Size = preMinimizeSize
+            }):Play()
+        end
     end)
 
 	-- Draggable Logic
