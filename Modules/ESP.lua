@@ -1,151 +1,146 @@
--- Modules/ESP.lua
+-- Modules/BoneESP.lua
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
--- Check if Drawing library exists
 if not Drawing then
-	warn("[ESP] Drawing library not found! Your executor does not support 2D ESP.")
+	warn("[BoneESP] Drawing library not found!")
 	return function() end
 end
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
-local ESP_Cache = {}
+local SkeletonCache = {}
 local Connections = {}
 
--- Helper to create Drawing objects cleanly
-local function CreateDrawing(className, properties)
-	local obj = Drawing.new(className)
-	for k, v in pairs(properties) do
-		obj[k] = v
+-- Define which parts connect to which
+local BoneConnections = {
+	{"head", "torso"},
+	{"torso", "shoulder1"},
+	{"shoulder1", "arm1"},
+	{"torso", "shoulder2"},
+	{"shoulder2", "arm2"},
+	{"torso", "hip1"},
+	{"hip1", "leg1"},
+	{"torso", "hip2"},
+	{"hip2", "leg2"}
+}
+
+local ValidParts = {
+	["head"] = true,
+	["torso"] = true,
+	["shoulder1"] = true,
+	["shoulder2"] = true,
+	["arm1"] = true,
+	["arm2"] = true,
+	["hip1"] = true,
+	["hip2"] = true,
+	["leg1"] = true,
+	["leg2"] = true
+}
+
+-- Helper to setup a Viewmodel skeleton
+local function SetupViewmodel(vm)
+	if vm.Name ~= "Viewmodel" then return end -- Ignore "LocalViewmodel"
+	if SkeletonCache[vm] then return end
+
+	local parts = {}
+	local lines = {}
+
+	-- Find all target parts
+	for _, child in ipairs(vm:GetDescendants()) do
+		if child:IsA("BasePart") and ValidParts[child.Name] then
+			parts[child.Name] = child
+		end
 	end
-	return obj
-end
 
-local function CreateESP(player)
-	if player == LocalPlayer then return end
-	if ESP_Cache[player] then return end
+	-- If it doesn't have at least a torso, it's not a full viewmodel
+	if not parts["torso"] then return end
 
-	local Box = CreateDrawing("Square", {
-		Color = Color3.fromRGB(255, 80, 80),
-		Thickness = 1.5,
-		Filled = false,
-		Transparency = 1,
-		Visible = false
-	})
+	-- Create a line for each bone connection
+	for _, connection in ipairs(BoneConnections) do
+		local line = Drawing.new("Line")
+		line.Color = Color3.fromRGB(255, 50, 50) -- Red skeleton
+		line.Thickness = 1.5
+		line.Transparency = 1
+		line.Visible = false
+		table.insert(lines, line)
+	end
 
-	local Name = CreateDrawing("Text", {
-		Color = Color3.fromRGB(255, 255, 255),
-		Size = 14,
-		Center = true,
-		Outline = true,
-		OutlineColor = Color3.fromRGB(0, 0, 0),
-		Font = Drawing.Fonts.GothamBold,
-		Visible = false
-	})
-
-	local Distance = CreateDrawing("Text", {
-		Color = Color3.fromRGB(200, 200, 200),
-		Size = 12,
-		Center = true,
-		Outline = true,
-		OutlineColor = Color3.fromRGB(0, 0, 0),
-		Font = Drawing.Fonts.Gotham,
-		Visible = false
-	})
-
-	ESP_Cache[player] = {
-		Box = Box,
-		Name = Name,
-		Distance = Distance
+	SkeletonCache[vm] = {
+		parts = parts,
+		lines = lines
 	}
 end
 
-local function RemoveESP(player)
-	if ESP_Cache[player] then
-		ESP_Cache[player].Box:Remove()
-		ESP_Cache[player].Name:Remove()
-		ESP_Cache[player].Distance:Remove()
-		ESP_Cache[player] = nil
+local function RemoveViewmodel(vm)
+	if SkeletonCache[vm] then
+		for _, line in ipairs(SkeletonCache[vm].lines) do
+			line:Remove()
+		end
+		SkeletonCache[vm] = nil
 	end
 end
 
--- Initialize existing players
-for _, player in ipairs(Players:GetPlayers()) do
-	CreateESP(player)
+-- Initial Scan for existing Viewmodels
+local viewmodelsFolder = Workspace:WaitForChild("Viewmodels", 5)
+if viewmodelsFolder then
+	for _, child in ipairs(viewmodelsFolder:GetChildren()) do
+		if child:IsA("Model") then SetupViewmodel(child) end
+	end
+	-- Listen for new ones
+	table.insert(Connections, viewmodelsFolder.ChildAdded:Connect(function(child)
+		if child:IsA("Model") then SetupViewmodel(child) end
+	end))
+	table.insert(Connections, viewmodelsFolder.ChildRemoved:Connect(function(child)
+		RemoveViewmodel(child)
+	end))
 end
-
--- Player Join/Leave
-table.insert(Connections, Players.PlayerAdded:Connect(CreateESP))
-table.insert(Connections, Players.PlayerRemoving:Connect(RemoveESP))
 
 -- Main Render Loop
 table.insert(Connections, RunService.RenderStepped:Connect(function()
-	if not Camera then
-		Camera = Workspace.CurrentCamera
-	end
+	if not Camera then Camera = Workspace.CurrentCamera end
 
-	for player, esp in pairs(ESP_Cache) do
-		local character = player.Character
-		if character then
-			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			local rootPart = character:FindFirstChild("HumanoidRootPart")
-			local head = character:FindFirstChild("Head")
+	for vm, data in pairs(SkeletonCache) do
+		-- Check if viewmodel was destroyed or removed
+		if not vm.Parent or not data.parts["torso"] then
+			RemoveViewmodel(vm)
+			continue
+		end
 
-			if humanoid and humanoid.Health > 0 and rootPart and head then
-				-- Calculate 2D screen positions
-				local headPos, onScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-				local rootPos = Camera:WorldToViewportPoint(rootPart.Position - Vector3.new(0, 2.5, 0))
-				
-				if onScreen then
-					local height = math.abs(headPos.Y - rootPos.Y)
-					local width = height / 2
-					local x = headPos.X - width / 2
-					local y = headPos.Y
+		for i, conn in ipairs(BoneConnections) do
+			local part1 = data.parts[conn[1]]
+			local part2 = data.parts[conn[2]]
+			local line = data.lines[i]
 
-					-- Update Box
-					esp.Box.Size = Vector2.new(width, height)
-					esp.Box.Position = Vector2.new(x, y)
-					esp.Box.Visible = true
+			if part1 and part2 then
+				local p1, onScreen1 = Camera:WorldToViewportPoint(part1.Position)
+				local p2, onScreen2 = Camera:WorldToViewportPoint(part2.Position)
 
-					-- Update Name
-					esp.Name.Text = player.Name
-					esp.Name.Position = Vector2.new(headPos.X, y - 18)
-					esp.Name.Visible = true
-
-					-- Update Distance
-					local dist = math.floor((rootPart.Position - Camera.CFrame.Position).Magnitude)
-					esp.Distance.Text = tostring(dist) .. " studs"
-					esp.Distance.Position = Vector2.new(headPos.X, y + height + 2)
-					esp.Distance.Visible = true
+				-- Draw the line if either part is visible on screen
+				if onScreen1 or onScreen2 then
+					line.From = Vector2.new(p1.X, p1.Y)
+					line.To = Vector2.new(p2.X, p2.Y)
+					line.Visible = true
 				else
-					esp.Box.Visible = false
-					esp.Name.Visible = false
-					esp.Distance.Visible = false
+					line.Visible = false
 				end
 			else
-				esp.Box.Visible = false
-				esp.Name.Visible = false
-				esp.Distance.Visible = false
+				line.Visible = false
 			end
-		else
-			esp.Box.Visible = false
-			esp.Name.Visible = false
-			esp.Distance.Visible = false
 		end
 	end
 end))
 
--- Return the cleanup function so the UI loader can turn it off
+-- Return cleanup function for the UI loader
 return function()
 	for _, conn in ipairs(Connections) do
 		conn:Disconnect()
 	end
-	for player, _ in pairs(ESP_Cache) do
-		RemoveESP(player)
+	for vm, _ in pairs(SkeletonCache) do
+		RemoveViewmodel(vm)
 	end
-	ESP_Cache = {}
+	SkeletonCache = {}
 	Connections = {}
 end
