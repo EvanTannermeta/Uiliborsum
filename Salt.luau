@@ -1,9 +1,10 @@
 --!strict
--- Luau UI Library v1.1
+-- Luau UI Library v1.2 (Resizable + Persistent)
 
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 
 local Library = {}
 Library.Theme = table.freeze({
@@ -15,6 +16,26 @@ Library.Theme = table.freeze({
 	Border = Color3.fromRGB(45, 45, 55),
     Close = Color3.fromRGB(255, 80, 80)
 })
+
+local CONFIG_FILE = "LuauUI_Config.json"
+
+local function LoadConfig(): {[string]: any}
+    local success, result = pcall(function()
+        if isfile and isfile(CONFIG_FILE) then
+            return HttpService:JSONDecode(readfile(CONFIG_FILE))
+        end
+        return nil
+    end)
+    return (success and result) or {}
+end
+
+local function SaveConfig(data: {[string]: any})
+    pcall(function()
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+        end
+    end)
+end
 
 local function Create(className: string, props: {[string]: any}?, children: {Instance}?): any
 	local inst = Instance.new(className)
@@ -36,7 +57,15 @@ Window.__index = Window
 
 function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 	local self = setmetatable({}, Window)
-	self.Size = config.Size or UDim2.new(0, 500, 0, 350)
+    
+    -- Load saved size or use default
+    local savedConfig = LoadConfig()
+    local defaultSize = config.Size or UDim2.new(0, 500, 0, 350)
+    local startSize = defaultSize
+    if savedConfig.SizeX and savedConfig.SizeY then
+        startSize = UDim2.new(0, savedConfig.SizeX, 0, savedConfig.SizeY)
+    end
+    self.Size = startSize
 	
 	-- Re-execution check
 	local guiParent = if gethui then gethui() else Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -56,8 +85,8 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 
 	self.Main = Create("Frame", {
 		Name = "Main",
-		Size = self.Size,
-		Position = UDim2.new(0.5, -self.Size.X.Offset/2, 0.5, -self.Size.Y.Offset/2),
+		Size = startSize,
+		Position = UDim2.new(0.5, -startSize.X.Offset/2, 0.5, -startSize.Y.Offset/2),
 		BackgroundColor3 = Library.Theme.Background,
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
@@ -75,7 +104,7 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		Parent = self.Main
 	})
 
-	local titleLbl = Create("TextLabel", {
+	Create("TextLabel", {
 		Text = config.Title,
 		Size = UDim2.new(1, -80, 1, 0),
 		Position = UDim2.new(0, 10, 0, 0),
@@ -115,15 +144,7 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		Parent = self.TitleBar
 	}, { Create("UICorner", { CornerRadius = UDim.new(0, 4) }) })
 
-    local minimized = false
-    minBtn.MouseButton1Click:Connect(function()
-        minimized = not minimized
-        TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
-            Size = if minimized then UDim2.new(0, 500, 0, 35) else self.Size
-        }):Play()
-    end)
-
-	-- Tab Container
+    -- Tab Container
 	self.TabList = Create("Frame", {
 		Name = "Tabs",
 		Size = UDim2.new(0, 120, 1, -35),
@@ -141,7 +162,39 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 		BorderSizePixel = 0,
 		Parent = self.Main
 	}, { Create("UICorner", { CornerRadius = UDim.new(0, 8) }) })
-	
+
+    -- Resize Handle
+    self.ResizeHandle = Create("Frame", {
+        Name = "ResizeHandle",
+        Size = UDim2.new(0, 15, 0, 15),
+        Position = UDim2.new(1, -15, 1, -15),
+        BackgroundTransparency = 1,
+        ZIndex = 10,
+        Parent = self.Main
+    })
+    
+    -- Draw a visual grip for the handle
+    Create("TextLabel", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "◢",
+        TextSize = 12,
+        TextColor3 = Library.Theme.SubText,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        TextYAlignment = Enum.TextYAlignment.Bottom,
+        Parent = self.ResizeHandle
+    })
+
+    local minimized = false
+    minBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        self.ResizeHandle.Visible = not minimized
+        TweenService:Create(self.Main, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+            Size = if minimized then UDim2.new(0, self.Main.Size.X.Offset, 0, 35) else self.Main.Size
+        }):Play()
+    end)
+
 	-- Draggable Logic
 	local dragging, dragStart, startPos
 	self.TitleBar.InputBegan:Connect(function(input)
@@ -162,6 +215,37 @@ function Library:CreateWindow(config: {Title: string, Size: UDim2?})
 			dragging = false
 		end
 	end)
+
+    -- Resize Logic
+    local resizing = false
+    local resizeStart, resizeStartSize
+    self.ResizeHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            resizing = true
+            resizeStart = input.Position
+            resizeStartSize = self.Main.Size
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - resizeStart
+            local newX = math.max(300, resizeStartSize.X.Offset + delta.X)
+            local newY = math.max(200, resizeStartSize.Y.Offset + delta.Y)
+            self.Main.Size = UDim2.new(0, newX, 0, newY)
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if resizing and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+            resizing = false
+            -- Save the new size
+            local conf = LoadConfig()
+            conf.SizeX = self.Main.Size.X.Offset
+            conf.SizeY = self.Main.Size.Y.Offset
+            SaveConfig(conf)
+        end
+    end)
 
 	self.Tabs = {}
 	return self
@@ -218,7 +302,6 @@ function Window:CreateTab(name: string)
 	tab.Content = scroll
 	tab.Window = self
 	
-	-- Auto-select first tab safely (fixes the Activated error)
 	if #self.Tabs == 1 then
 		SelectTab()
 	end
